@@ -13,6 +13,7 @@ import yaml
 from  scipy.spatial import KDTree
 
 STATE_COUNT_THRESHOLD = 3
+TESTING_WITHOUT_IMG = True # Set to False to remove the dependency on Simulator light states
 
 class TLDetector(object):
     def __init__(self):
@@ -57,26 +58,26 @@ class TLDetector(object):
 
     def pose_cb(self, msg):
         self.pose = msg
-
-        #Remove -- Temporary code - sub for image processing
-        light_wp, state = self.process_traffic_lights()
-        '''
-        Publish upcoming red lights at camera frequency.
-        Each predicted state has to occur `STATE_COUNT_THRESHOLD` number
-        of times till we start using it. Otherwise the previous stable state is
-        used.
-        '''
-        if self.state != state:
-            self.state_count = 0
-            self.state = state
-        elif self.state_count >= STATE_COUNT_THRESHOLD:
-            self.last_state = self.state
-            light_wp = light_wp if state == TrafficLight.RED else -1
-            self.last_wp = light_wp
-            self.upcoming_red_light_pub.publish(Int32(light_wp))
-        else:
-            self.upcoming_red_light_pub.publish(Int32(self.last_wp))
-        self.state_count += 1
+        if TESTING_WITHOUT_IMG:
+            #Remove -- Temporary code - sub for image processing
+            light_wp, state = self.process_traffic_lights()
+            '''
+            Publish upcoming red lights at camera frequency.
+            Each predicted state has to occur `STATE_COUNT_THRESHOLD` number
+            of times till we start using it. Otherwise the previous stable state is
+            used.
+            '''
+            if self.state != state:
+                self.state_count = 0
+                self.state = state
+            elif self.state_count >= STATE_COUNT_THRESHOLD:
+                self.last_state = self.state
+                light_wp = light_wp if state == TrafficLight.RED else -1
+                self.last_wp = light_wp
+                self.upcoming_red_light_pub.publish(Int32(light_wp))
+            else:
+                self.upcoming_red_light_pub.publish(Int32(self.last_wp))
+            self.state_count += 1
 
         # Remove till here
 
@@ -146,7 +147,7 @@ class TLDetector(object):
         # Dummy code to be removed later
         #rospy.loginfo('Light state: %s', self.lights[light_idx].state)
         if(self.lights):
-            rospy.loginfo(self.lights[light_idx].state)
+            #rospy.loginfo(self.lights[light_idx].state)
             return self.lights[light_idx].state
         else:
             rospy.loginfo('Lights uninit')
@@ -214,9 +215,18 @@ class TLDetector(object):
         #     return -1, TrafficLight.UNKNOWN
 
         if light:
-            state = self.get_sim_light_state(tl_idx)
-            return line_wp_idx, state
+            if TESTING_WITHOUT_IMG:
+                state = self.get_sim_light_state(tl_idx)
+                return line_wp_idx, state
+            else:
+                # Fix this for image processing.
+                #state = self.get_light_state(light)
+                return -1, TrafficLight.UNKNOWN
+
         return -1, TrafficLight.UNKNOWN
+
+
+
 
         #
 
