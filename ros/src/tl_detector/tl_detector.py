@@ -93,12 +93,11 @@ class TLDetector(object):
             msg (Image): image from car-mounted camera
         """
 
-        # Only check every 10th image (attempt at speed-up)
+        # Only check every 3rd image (attempt at speed-up)
         self.image_counter += 1
-        if self.image_counter % 10 != 0:           
+        if self.image_counter % 3 != 0:           
             return
         # End speed-up
-        print("Image counter: {0}".format(self.image_counter))
 
         self.has_image = True
         self.camera_image = msg
@@ -149,10 +148,47 @@ class TLDetector(object):
             rospy.loginfo('Lights uninit')
         return TrafficLight.GREEN
 
-    def get_light_state(self, light):
+    def get_tl_coords_in_image(self, coords_in_world):
+        """Get transform from (X,Y,Z) world coords to (x,y) camera coords. 
+        See https://github.com/udacity/CarND-Capstone/issues/24
+        Args:
+            coords_in_world : TrafficLight pose
+        """
+        print("Coords in world: ")
+        print(coords_in_world)
+        self.listener.waitForTransform("/world", "/base_link", rospy.Time(), rospy.Duration(1.0))
+        while not rospy.is_shutdown():
+            try:
+                now = rospy.Time.now()
+                self.listener.waitForTransform("/world", "/base_link", now, rospy.Duration(1.0))
+                (trans,rot) = self.listener.lookupTransform("/world", "/base_link", now)
+                print("Got map transform")
+            except (tf.Exception, tf.LookupException, tf.ConnectivityException):
+                rospy.log_err("Couldn't find camera to map transform.")
+                print("Can't get map transform")
+                
+        P = PyKDL.Vector(coords_in_world.x, coords_in_world.y, coords_in_world.z)
+        R = PyKDL.Rotation.Quaternion(*rot)
+        T = PyKDL.Vector(*trans)
+        p_camera = R * P + T
+        print("got p_camera")
+        
+        focal_length = 2300
+        half_image_width = 400
+        half_image_height = 300
+        x_offset = -30
+        y_offset = 340
+        
+        p_x = - focal_length * p_camera[1] / p_camera[0] + half_image_width + x_offset
+        p_y = - focal_length * p_camera[2] / p_camera[0] + half_image_height + y_offset
+        print("got p_x, p_y")
+        
+        return (int(p_x),int(p_y))
+    
+    def get_light_state(self, tl_idx):
         """Determines the current color of the traffic light
         Args:
-            light (TrafficLight): light to classify
+            tl_idx (int): index of light to classify
         Returns:
             int: ID of traffic light color (specified in styx_msgs/TrafficLight)
         """
@@ -164,49 +200,22 @@ class TLDetector(object):
         cv_image = self.bridge.imgmsg_to_cv2(self.camera_image, "bgr8")
 
         # find light in this image using coord transform
-        x,y = get_tl_coords_in_image(light.pose)
+        print("Calling get coords; Light:")
+        (x,y) = self.get_tl_coords_in_image(self.lights[tl_idx].pose.pose.position)
+        print("Transformed coordinates: {0},{1}".format(x,y))
         # TODO: crop image around this pixel coord to get traffic light image
         # cv_image = (cropping...)
         
         return self.light_classifier.get_classification(cv_image)
-
-    def get_tl_coords_in_image(self, coords_in_world):
-        """Get transform from (X,Y,Z) world coords to (x,y) camera coords. 
-        See https://github.com/udacity/CarND-Capstone/issues/24
-        """
-        listener.waitForTransform("/world", "/camera", rospy.Time(), rospy.Duration(1.0))
-        while not rospy.is_shutdown():
-            try:
-                now = rospy.Time.now()
-                self.listener.waitForTransform("/world", "/camera", now, rospy.Duration(1.0))
-                (trans,rot) = listener.lookupTransform("/world", "/camera", now)
-            except (tf.Exception, tf.LookupException, tf.ConnectivityException):
-                rospy.log_err("Couldn't find camera to map transform.")
-                
-        P = PyKDL.Vector(coords_in_world.x, coords_in_world.y, coords_in_world.z)
-        R = PyKDL.Rotation.Quaternion(*rot)
-        T = PyKDL.Vector(*trans)
-        p_camera = R * P + T
-        
-        focal_length = 2300
-        half_image_width = 400
-        half_image_height = 300
-        x_offset = -30
-        y_offset = 340
-        
-        p_x = - focal_length * p_camera[1] / p_camera[0] + half_image_width + x_offset
-        p_y = - focal_length * p_camera[2] / p_camera[0] + half_image_height + y_offset
-        
-        return (int(p_x),int(p_y))
                 
     def process_traffic_lights(self):
         """Finds closest visible traffic light, if one exists, and determines its
             location and color
         Returns:
-            int: index of waypoint closes to the upcoming stop line for a traffic light (-1 if none exists)
+            int: index of waypoint closest to the upcoming stop line for a traffic light (-1 if none exists)
             int: ID of traffic light color (specified in styx_msgs/TrafficLight)
         """
-        light = None
+        line = None
         max_visible_dist = 100 # units
         line_wp_idx = -1
         tl_idx = -1
@@ -218,7 +227,7 @@ class TLDetector(object):
 
         #TODO find the closest visible traffic light (if one exists)
         diff = len(self.waypoints.waypoints)
-        for i, temp_closest_light in enumerate(stop_line_positions):
+        for i, temp_closest_stop_position in enumerate(stop_line_positions):
             line = stop_line_positions[i]
             wp_idx = self.get_closest_waypoint(line[0], line[1])
             d = wp_idx - car_position
@@ -226,7 +235,7 @@ class TLDetector(object):
                 diff = d
                 line_wp_idx = wp_idx
                 tl_idx = i
-                light = temp_closest_light
+                line = temp_closest_stop_position
 
         # if light and self.closest_light != light:
         #     rospy.loginfo('TL coming up: %d', diff)
@@ -239,14 +248,16 @@ class TLDetector(object):
         #     self.closest_light = None
         #     return -1, TrafficLight.UNKNOWN
 
-        if light:
+        if tl_idx > 0:
             if TESTING_WITHOUT_IMG:
                 state = self.get_sim_light_state(tl_idx)
                 return line_wp_idx, state
                 
             else:
                 # Fix this for image processing.
-                state = self.get_light_state(light)
+                print("Calling get_light_state")
+                state = self.get_light_state(tl_idx)
+                print("Light state: {0}".format(state))
                 return -1, TrafficLight.UNKNOWN
 
         return -1, TrafficLight.UNKNOWN
