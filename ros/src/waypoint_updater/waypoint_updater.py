@@ -35,7 +35,6 @@ class WaypointUpdater(object):
         rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
         # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
 
-
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
 
         # TODO: Add other member variables you need below
@@ -48,12 +47,11 @@ class WaypointUpdater(object):
         self.loop()
 
     def loop(self):
-        rate = rospy.Rate(20)
+        rate = rospy.Rate(5)  # Drop rate to 5 Hz to handle latency
         while not rospy.is_shutdown():
             rate.sleep()
             if self.pose and self.base_waypoints:
                 self.publish_waypoints()
-
 
     def get_closest_waypoint_idx(self):
         x = self.pose.pose.position.x
@@ -72,7 +70,6 @@ class WaypointUpdater(object):
         if val > 0:
             closest_ids = (closest_idx +1) % len(self.waypoints_2d)
         return closest_idx
-
 
     def publish_waypoints(self):
         #rospy.loginfo('Publishing closest')
@@ -94,7 +91,6 @@ class WaypointUpdater(object):
             lane.waypoints = self.decelerate_waypoints(base_waypoints, closest_waypoint_idx)
 
         return lane
-
 
     def decelerate_waypoints(self, waypoints, closest_idx):
         temp = []
