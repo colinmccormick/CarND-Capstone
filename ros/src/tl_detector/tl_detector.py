@@ -11,6 +11,7 @@ import tf
 import cv2
 import yaml
 from  scipy.spatial import KDTree
+import PyKDL
 
 STATE_COUNT_THRESHOLD = 3
 TESTING_WITHOUT_IMG = False # Set to False to remove the dependency on Simulator light states
@@ -93,7 +94,7 @@ class TLDetector(object):
             msg (Image): image from car-mounted camera
         """
 
-        # Only check every 3rd image (attempt at speed-up)
+        # Only check every 3rd image (reduce latency)
         self.image_counter += 1
         if self.image_counter % 3 != 0:           
             return
@@ -152,24 +153,25 @@ class TLDetector(object):
         """Get transform from (X,Y,Z) world coords to (x,y) camera coords. 
         See https://github.com/udacity/CarND-Capstone/issues/24
         Args:
-            coords_in_world : TrafficLight pose
+            coords_in_world : TrafficLight coordinates
         """
-        print("Coords in world: ")
-        print(coords_in_world)
+        
         self.listener.waitForTransform("/world", "/base_link", rospy.Time(), rospy.Duration(1.0))
-        while not rospy.is_shutdown():
-            try:
-                now = rospy.Time.now()
-                self.listener.waitForTransform("/world", "/base_link", now, rospy.Duration(1.0))
-                (trans,rot) = self.listener.lookupTransform("/world", "/base_link", now)
-                print("Got map transform")
-            except (tf.Exception, tf.LookupException, tf.ConnectivityException):
-                rospy.log_err("Couldn't find camera to map transform.")
-                print("Can't get map transform")
+        try:
+            now = rospy.Time.now()
+            self.listener.waitForTransform("/world", "/base_link", now, rospy.Duration(1.0))
+            (trans,rot) = self.listener.lookupTransform("/world", "/base_link", now)
+            print("Got map transform")
+        except (tf.Exception, tf.LookupException, tf.ConnectivityException):
+            rospy.log_err("Couldn't find camera to map transform.")
+            print("Can't get map transform")
                 
         P = PyKDL.Vector(coords_in_world.x, coords_in_world.y, coords_in_world.z)
+        print("Got vector")
         R = PyKDL.Rotation.Quaternion(*rot)
+        print("Got rot")
         T = PyKDL.Vector(*trans)
+        print("Got T")
         p_camera = R * P + T
         print("got p_camera")
         
@@ -209,8 +211,8 @@ class TLDetector(object):
         return self.light_classifier.get_classification(cv_image)
                 
     def process_traffic_lights(self):
-        """Finds closest visible traffic light, if one exists, and determines its
-            location and color
+        """Finds closest visible traffic light, if one exists, and determines its color
+        and the best waypoint for stopping.
         Returns:
             int: index of waypoint closest to the upcoming stop line for a traffic light (-1 if none exists)
             int: ID of traffic light color (specified in styx_msgs/TrafficLight)
@@ -231,7 +233,7 @@ class TLDetector(object):
             line = stop_line_positions[i]
             wp_idx = self.get_closest_waypoint(line[0], line[1])
             d = wp_idx - car_position
-            if d>=0 and d < diff and d <max_visible_dist:
+            if d >= 0 and d < diff and d < max_visible_dist:
                 diff = d
                 line_wp_idx = wp_idx
                 tl_idx = i
