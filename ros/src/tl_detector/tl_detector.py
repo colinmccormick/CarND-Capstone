@@ -4,14 +4,16 @@ from std_msgs.msg import Int32
 from geometry_msgs.msg import PoseStamped, Pose
 from styx_msgs.msg import TrafficLightArray, TrafficLight
 from styx_msgs.msg import Lane
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
 from light_classification.tl_classifier import TLClassifier
 import tf
 import cv2
 import yaml
-from  scipy.spatial import KDTree
-import PyKDL
+from scipy.spatial import KDTree
+#from scipy.spatial.transform import Rotation as R
+import math
+import numpy as np
 
 STATE_COUNT_THRESHOLD = 3
 TESTING_WITHOUT_IMG = False # Set to False to remove the dependency on Simulator light states
@@ -27,11 +29,17 @@ class TLDetector(object):
         self.camera_image = None
         self.lights = []
         self.closest_light = None
+        self.camera_info = None
              
         sub1 = rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         sub2 = rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
         sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
         sub6 = rospy.Subscriber('/image_color', Image, self.image_cb)
+        sub7 = rospy.Subscriber('/camera_info', CameraInfo, self.camera_cb)
+        
+        # get camera info
+        #calib_yaml = rospy.get_param("/grasshopper_calibration_yaml")
+        #self.camera_info = yaml_to_CameraInfo(calib_yaml)
 
         config_string = rospy.get_param("/traffic_light_config")
         self.config = yaml.load(config_string)
@@ -50,7 +58,11 @@ class TLDetector(object):
         self.image_counter = 0
 
         rospy.spin()
-
+        
+    def camera_cb(self, msg):
+        print("Got camera info")
+        self.camera_info = msg
+        
     def pose_cb(self, msg):
         self.pose = msg
 
@@ -166,26 +178,32 @@ class TLDetector(object):
             rospy.log_err("Couldn't find camera to map transform.")
             print("Can't get map transform")
                 
-        P = PyKDL.Vector(coords_in_world.x, coords_in_world.y, coords_in_world.z)
-        print("Got vector")
-        R = PyKDL.Rotation.Quaternion(*rot)
-        print("Got rot")
-        T = PyKDL.Vector(*trans)
-        print("Got T")
-        p_camera = R * P + T
-        print("got p_camera")
+        # do 3D rotation and translation of light coords from world to car frame
+        x_world = coords_in_world.x
+        y_world = coords_in_world.y
+        z_world = coords_in_world.z
+        e = tf.transformations.euler_from_quaternion(rot)
+        cos_yaw = math.cos(e[2])
+        sin_yaw = math.sin(e[2])
+        x_car = x_world * cos_yaw - y_world * sin_yaw + trans[0]
+        y_car = x_world * sin_yaw + y_world * cos_yaw + trans[1]
+        z_car = z_world + trans[2]
+     
+        # use camera projection matrix to translate world coords to camera pixel coords
+        # http://docs.ros.org/melodic/api/sensor_msgs/html/msg/CameraInfo.html
+        uvw = np.dot(self.camera_info.P,[x_car,y_car,z_car,1])
+        camera_x = uvw[0]/uvw[2]
+        camera_y = uvw[1]/uvw[2]
         
-        focal_length = 2300
-        half_image_width = 400
-        half_image_height = 300
-        x_offset = -30
-        y_offset = 340
+        #focal_length = 2300
+        #half_image_width = 400
+        #half_image_height = 300
+        #x_offset = -30
+        #y_offset = 340
+        #half_image_width = 400
+        #half_image_height = 300
         
-        p_x = - focal_length * p_camera[1] / p_camera[0] + half_image_width + x_offset
-        p_y = - focal_length * p_camera[2] / p_camera[0] + half_image_height + y_offset
-        print("got p_x, p_y")
-        
-        return (int(p_x),int(p_y))
+        return (camera_x,camera_y)
     
     def get_light_state(self, tl_idx):
         """Determines the current color of the traffic light
@@ -202,9 +220,8 @@ class TLDetector(object):
         cv_image = self.bridge.imgmsg_to_cv2(self.camera_image, "bgr8")
 
         # find light in this image using coord transform
-        print("Calling get coords; Light:")
         (x,y) = self.get_tl_coords_in_image(self.lights[tl_idx].pose.pose.position)
-        print("Transformed coordinates: {0},{1}".format(x,y))
+        print("Camera pixel coords: {0},{1}".format(x,y))
         # TODO: crop image around this pixel coord to get traffic light image
         # cv_image = (cropping...)
         
