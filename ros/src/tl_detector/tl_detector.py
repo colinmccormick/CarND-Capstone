@@ -11,9 +11,8 @@ import tf
 import cv2
 import yaml
 from scipy.spatial import KDTree
-#from scipy.spatial.transform import Rotation as R
-import math
-import numpy as np
+#import math
+#import numpy as np
 
 STATE_COUNT_THRESHOLD = 3
 TESTING_WITHOUT_IMG = False # Set to False to remove the dependency on Simulator light states
@@ -29,13 +28,14 @@ class TLDetector(object):
         self.camera_image = None
         self.lights = []
         self.closest_light = None
-        self.camera_info = None
+        #self.camera_info = None
              
         sub1 = rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         sub2 = rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
         sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
         sub6 = rospy.Subscriber('/image_color', Image, self.image_cb)
-        sub7 = rospy.Subscriber('/camera_info', CameraInfo, self.camera_cb)
+        #sub7 = rospy.Subscriber('/image_raw', Image, self.image_raw_cb) # needed for /camera_info to publish
+        #sub8 = rospy.Subscriber('/camera_info', CameraInfo, self.camera_cb)
         
         # get camera info
         #calib_yaml = rospy.get_param("/grasshopper_calibration_yaml")
@@ -59,9 +59,12 @@ class TLDetector(object):
 
         rospy.spin()
         
-    def camera_cb(self, msg):
-        print("Got camera info")
-        self.camera_info = msg
+    #def image_raw_cb(self, msg):
+    #    pass
+        
+    #def camera_cb(self, msg):
+    #    print("Got camera info")
+    #    self.camera_info = msg
         
     def pose_cb(self, msg):
         self.pose = msg
@@ -183,12 +186,14 @@ class TLDetector(object):
         y_world = coords_in_world.y
         z_world = coords_in_world.z
         e = tf.transformations.euler_from_quaternion(rot)
+        # use yaw for coordinate transformation (assuming pitch and roll are effectively zero)
         cos_yaw = math.cos(e[2])
         sin_yaw = math.sin(e[2])
         x_car = x_world * cos_yaw - y_world * sin_yaw + trans[0]
         y_car = x_world * sin_yaw + y_world * cos_yaw + trans[1]
         z_car = z_world + trans[2]
      
+        print("Coords of light in car frame: x:{0}, y:{1}, z:{2}".format(x_car,y_car,z_car))
         # use camera projection matrix to translate world coords to camera pixel coords
         # http://docs.ros.org/melodic/api/sensor_msgs/html/msg/CameraInfo.html
         uvw = np.dot(self.camera_info.P,[x_car,y_car,z_car,1])
@@ -220,13 +225,24 @@ class TLDetector(object):
         cv_image = self.bridge.imgmsg_to_cv2(self.camera_image, "bgr8")
 
         # find light in this image using coord transform
-        (x,y) = self.get_tl_coords_in_image(self.lights[tl_idx].pose.pose.position)
-        print("Camera pixel coords: {0},{1}".format(x,y))
+        #(x,y) = self.get_tl_coords_in_image(self.lights[tl_idx].pose.pose.position)
+        #print("Camera pixel coords: {0},{1}".format(x,y))
         # TODO: crop image around this pixel coord to get traffic light image
         # cv_image = (cropping...)
         
-        return self.light_classifier.get_classification(cv_image)
-                
+        # since coord transform doesn't work with camera projection matrix, try a CNN
+        # use a pre-trained classifier that can find traffic lights in the camera image
+        # http://localhost:8888/?token=224d9a43c5a6dcd0f94fe02f0c3d86f88ccc4acfae6ad1c8
+        # we'll use faster_rcnn_resnet50 from TensorFlow model zoo
+        # https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/detection_model_zoo.md
+        
+        # this should print out detection info
+        tl_image = self.light_classifier.detect_traffic_light(cv_image)
+        if tl_image.any():
+            return self.light_classifier.get_classification(tl_image)
+        else:
+            return TrafficLight.GREEN
+    
     def process_traffic_lights(self):
         """Finds closest visible traffic light, if one exists, and determines its color
         and the best waypoint for stopping.
@@ -277,7 +293,8 @@ class TLDetector(object):
                 print("Calling get_light_state")
                 state = self.get_light_state(tl_idx)
                 print("Light state: {0}".format(state))
-                return -1, TrafficLight.UNKNOWN
+                return tl_idx, state
+                #return -1, TrafficLight.UNKNOWN
 
         return -1, TrafficLight.UNKNOWN
 
